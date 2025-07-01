@@ -65,6 +65,50 @@ ADD --link --chown=101:0 --chmod=0755 build/scripts/ubi-clean.sh ubi-clean.sh
 # @See https://github.com/nginx/kubernetes-ingress/issues/7360
 ADD --link --chown=101:0 --chmod=0755 build/dependencies/tracking.info.default tracking.info
 
+# Add custom sleep module source
+ADD --link --chown=101:0 build/ngx_http_sleep_module.c ngx_http_sleep_module.c
+
+############################################# Compile Sleep Module #############################################
+FROM nginx:1.27.5-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 AS sleep-module-builder
+
+# Install build dependencies
+RUN apk add --no-cache gcc libc-dev make pcre2-dev zlib-dev openssl-dev linux-headers
+
+# Download and extract the same NGINX version as the base images
+RUN wget -q http://nginx.org/download/nginx-1.27.5.tar.gz \
+    && tar -xzf nginx-1.27.5.tar.gz
+
+# Copy the sleep module source
+COPY --from=nginx-files ngx_http_sleep_module.c /nginx-1.27.5/src/http/modules/
+
+# Create module config file with the correct name
+RUN cat > /nginx-1.27.5/src/http/modules/config << 'EOF'
+ngx_addon_name=ngx_http_sleep_module
+if test -n "$dynamic_modules" || test -n "$ngx_module_link"; then
+    ngx_module_type=HTTP
+    ngx_module_name=ngx_http_sleep_module
+    ngx_module_srcs="$ngx_addon_dir/ngx_http_sleep_module.c"
+    ngx_module_libs=
+    . auto/module
+else
+    HTTP_MODULES="$HTTP_MODULES ngx_http_sleep_module"
+    NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/ngx_http_sleep_module.c"
+fi
+EOF
+
+# Configure and build the module
+WORKDIR /nginx-1.27.5
+RUN ./configure \
+    --with-compat \
+    --add-dynamic-module=src/http/modules \
+    --with-cc-opt='-Os -fomit-frame-pointer -g' \
+    --with-ld-opt='-Wl,--as-needed,-O1,--sort-common' \
+    && make modules
+
+# Create a stage with just the compiled module
+FROM scratch AS sleep-module
+COPY --from=sleep-module-builder /nginx-1.27.5/objs/ngx_http_sleep_module.so /ngx_http_sleep_module.so
+
 ############################################# Patch Image #############################################
 FROM ${IMAGE_NAME} AS patched
 ARG IMAGE_NAME
@@ -96,6 +140,8 @@ RUN --mount=type=bind,from=nginx-files,src=nginx_signing.rsa.pub,target=/etc/apk
 	&& agent.sh \
 	&& sed -i -e '/nginx.org/d' /etc/apk/repositories
 
+# Copy the compiled sleep module
+COPY --from=sleep-module --chown=101:0 /ngx_http_sleep_module.so /usr/lib/nginx/modules/
 
 ############################################# Base image for Debian #############################################
 FROM nginx:1.27.5@sha256:6784fb0834aa7dbbe12e3d7471e69c290df3e6ba810dc38b34ae33d3c1c05f7d AS debian
@@ -119,6 +165,8 @@ RUN --mount=type=bind,from=nginx-files,src=nginx_signing.key,target=/tmp/nginx_s
 	&& agent.sh \
 	&& ldconfig
 
+# Copy the compiled sleep module
+COPY --from=sleep-module --chown=101:0 /ngx_http_sleep_module.so /usr/lib/nginx/modules/
 
 ############################################# Base image for UBI #############################################
 FROM ubi-minimal AS ubi
