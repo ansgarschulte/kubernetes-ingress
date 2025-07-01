@@ -81,22 +81,7 @@ RUN wget -q http://nginx.org/download/nginx-1.27.5.tar.gz \
 # Copy the sleep module source
 COPY --from=nginx-files ngx_http_sleep_module.c /nginx-1.27.5/src/http/modules/
 
-# Create module config file with the correct name
-RUN cat > /nginx-1.27.5/src/http/modules/config << 'EOF'
-ngx_addon_name=ngx_http_sleep_module
-if test -n "$dynamic_modules" || test -n "$ngx_module_link"; then
-    ngx_module_type=HTTP
-    ngx_module_name=ngx_http_sleep_module
-    ngx_module_srcs="$ngx_addon_dir/ngx_http_sleep_module.c"
-    ngx_module_libs=
-    . auto/module
-else
-    HTTP_MODULES="$HTTP_MODULES ngx_http_sleep_module"
-    NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/ngx_http_sleep_module.c"
-fi
-EOF
-
-# Configure and build the module
+# Configure and build the module as a dynamic module
 WORKDIR /nginx-1.27.5
 RUN ./configure \
     --with-compat \
@@ -121,6 +106,12 @@ USER 0
 RUN --mount=type=bind,from=nginx-files,src=patch-os.sh,target=/usr/local/bin/patch-os.sh \
 	if [ -f /etc/apk/repositories ]; then sed -i -e '/nginx.com/d' /etc/apk/repositories; fi \
 	&& patch-os.sh
+
+# Copy the compiled sleep module and create module loading configuration
+COPY --from=sleep-module --chown=101:0 /ngx_http_sleep_module.so /usr/lib/nginx/modules/
+RUN echo "load_module /usr/lib/nginx/modules/ngx_http_sleep_module.so;" > /etc/nginx/modules-available/50-sleep.conf \
+    && ln -sf /etc/nginx/modules-available/50-sleep.conf /etc/nginx/modules-enabled/50-sleep.conf
+
 USER 101
 
 
@@ -140,8 +131,12 @@ RUN --mount=type=bind,from=nginx-files,src=nginx_signing.rsa.pub,target=/etc/apk
 	&& agent.sh \
 	&& sed -i -e '/nginx.org/d' /etc/apk/repositories
 
-# Copy the compiled sleep module
+# Copy the compiled sleep module and create module loading configuration
 COPY --from=sleep-module --chown=101:0 /ngx_http_sleep_module.so /usr/lib/nginx/modules/
+RUN mkdir -p /etc/nginx/modules-available /etc/nginx/modules-enabled \
+    && echo "load_module /usr/lib/nginx/modules/ngx_http_sleep_module.so;" > /etc/nginx/modules-available/50-sleep.conf \
+    && ln -sf /etc/nginx/modules-available/50-sleep.conf /etc/nginx/modules-enabled/50-sleep.conf
+
 
 ############################################# Base image for Debian #############################################
 FROM nginx:1.27.5@sha256:6784fb0834aa7dbbe12e3d7471e69c290df3e6ba810dc38b34ae33d3c1c05f7d AS debian
@@ -165,8 +160,11 @@ RUN --mount=type=bind,from=nginx-files,src=nginx_signing.key,target=/tmp/nginx_s
 	&& agent.sh \
 	&& ldconfig
 
-# Copy the compiled sleep module
+# Copy the compiled sleep module and create module loading configuration
 COPY --from=sleep-module --chown=101:0 /ngx_http_sleep_module.so /usr/lib/nginx/modules/
+RUN echo "load_module /usr/lib/nginx/modules/ngx_http_sleep_module.so;" > /etc/nginx/modules-available/50-sleep.conf \
+    && ln -sf /etc/nginx/modules-available/50-sleep.conf /etc/nginx/modules-enabled/50-sleep.conf
+
 
 ############################################# Base image for UBI #############################################
 FROM ubi-minimal AS ubi
@@ -208,6 +206,12 @@ RUN --mount=type=bind,from=nginx-files,src=nginx_signing.key,target=/tmp/nginx_s
 	&& rm /etc/yum.repos.d/nginx.repo \
 	&& ubi-clean.sh
 
+# Copy the compiled sleep module and create module loading configuration
+COPY --from=sleep-module --chown=101:0 /ngx_http_sleep_module.so /usr/lib/nginx/modules/
+RUN echo "load_module /usr/lib/nginx/modules/ngx_http_sleep_module.so;" > /etc/nginx/modules-available/50-sleep.conf \
+    && ln -sf /etc/nginx/modules-available/50-sleep.conf /etc/nginx/modules-enabled/50-sleep.conf
+
+
 ############################################# Base image for Alpine with NGINX Plus ##############################################
 FROM alpine:3.21@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c AS alpine-plus
 ARG NGINX_PLUS_VERSION
@@ -228,6 +232,12 @@ RUN --mount=type=secret,id=nginx-repo.crt,dst=/etc/apk/cert.pem,mode=0644 \
 	&& mkdir -p /etc/nginx/reporting/ && cp -av /tmp/nginx/reporting/tracking.info /etc/nginx/reporting/tracking.info \
 	&& agent.sh \
 	&& sed -i -e '/nginx.com/d' /etc/apk/repositories
+
+# Copy the compiled sleep module and create module loading configuration
+COPY --from=sleep-module --chown=101:0 /ngx_http_sleep_module.so /usr/lib/nginx/modules/
+RUN mkdir -p /etc/nginx/modules-available /etc/nginx/modules-enabled \
+    && echo "load_module /usr/lib/nginx/modules/ngx_http_sleep_module.so;" > /etc/nginx/modules-available/50-sleep.conf \
+    && ln -sf /etc/nginx/modules-available/50-sleep.conf /etc/nginx/modules-enabled/50-sleep.conf
 
 
 ############################################# Base image for Alpine with NGINX Plus and FIPS #############################################
@@ -426,13 +436,17 @@ RUN --mount=type=secret,id=nginx-repo.crt,dst=/etc/ssl/nginx/nginx-repo.crt,mode
 	--mount=type=bind,from=nginx-files,src=nginx-agent.repo,target=/etc/yum.repos.d/nginx-agent.repo,rw \
 	--mount=type=bind,from=nginx-files,src=agent.sh,target=/usr/local/bin/agent.sh \
 	--mount=type=bind,from=nginx-files,src=tracking.info,target=/tmp/nginx/reporting/tracking.info \
-	--mount=type=bind,from=ubi9-packages,src=/,target=/ubi-bin/ \
 	mkdir -p /etc/nginx/reporting/ && cp -av /tmp/nginx/reporting/tracking.info /etc/nginx/reporting/tracking.info \
 	&& ubi-setup.sh \
 	&& rpm -Uvh /ubi-bin/c-ares-*.rpm \
 	&& microdnf --nodocs install -y nginx-plus nginx-plus-module-njs nginx-plus-module-otel nginx-plus-module-fips-check nginx-agent-3.0.* \
 	&& agent.sh	\
 	&& ubi-clean.sh
+
+# Copy the compiled sleep module and create module loading configuration
+COPY --from=sleep-module --chown=101:0 /ngx_http_sleep_module.so /usr/lib/nginx/modules/
+RUN echo "load_module /usr/lib/nginx/modules/ngx_http_sleep_module.so;" > /etc/nginx/modules-available/50-sleep.conf \
+    && ln -sf /etc/nginx/modules-available/50-sleep.conf /etc/nginx/modules-enabled/50-sleep.conf
 
 
 ############################################# Base image for UBI with NGINX Plus and App Protect WAF & DoS #############################################
@@ -770,7 +784,7 @@ ARG BUILD_OS
 LABEL org.nginx.kic.image.build.version="goreleaser"
 
 COPY --link --chown=101:0 --from=goreleaser-setcap-prebuilt /nginx-ingress /
-# root is required for `setcap` invocation
+// root is required for `setcap` invocation
 USER 0
 RUN --mount=type=bind,target=/tmp [ -z "${BUILD_OS##*plus*}" ] && PLUS=-plus; cp -a /tmp/internal/configs/version1/nginx$PLUS.ingress.tmpl /tmp/internal/configs/version1/nginx$PLUS.tmpl \
 	/tmp/internal/configs/version2/nginx$PLUS.virtualserver.tmpl /tmp/internal/configs/version2/nginx$PLUS.transportserver.tmpl / \

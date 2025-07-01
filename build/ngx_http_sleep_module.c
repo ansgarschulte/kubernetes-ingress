@@ -128,9 +128,11 @@ ngx_http_sleep_handler(ngx_http_request_t *r)
 
     slcf = ngx_http_get_module_loc_conf(r, ngx_http_sleep_module);
 
-    if (slcf->sleep_ms == NGX_CONF_UNSET_MSEC) {
+    if (slcf->sleep_ms == NGX_CONF_UNSET_MSEC || slcf->sleep_ms == 0) {
         return NGX_DECLINED;
     }
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "sleep handler, sleep_ms: %M", slcf->sleep_ms);
 
     if (slcf->sleep_ms == 0) {
         return NGX_DECLINED;
