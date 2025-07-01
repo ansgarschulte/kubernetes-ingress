@@ -28,6 +28,7 @@ load_module modules/ngx_fips_check_module.so;
 {{- end}}
 
 load_module modules/ngx_http_js_module.so;
+load_module modules/ngx_http_sleep_module.so;
 
 events {
     worker_connections  {{.WorkerConnections}};
