@@ -197,6 +197,7 @@
     ngx_add_timer(&ctx->sleep_event, (ngx_msec_t)sleep_time);
 
     // Request parken
+    r->main->count++;
     return NGX_DONE;
  }
 
@@ -209,7 +210,10 @@
      ngx_log_error(NGX_LOG_NOTICE, r->connection->log, 0,
                    "finished sleeping (async)");
 
-       // Resume normal processing
-       ngx_http_core_run_phases(r);
+     // Resume normal processing
+     ngx_http_core_run_phases(r);
+
+     // Decrement reference count
+     r->main->count--;
  }
  
