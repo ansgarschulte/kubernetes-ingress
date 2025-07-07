@@ -5,6 +5,7 @@
  #include <ngx_config.h>
  #include <ngx_core.h>
  #include <ngx_http.h>
+ #include <ngx_http_core_module.h>
 
  typedef struct {
      ngx_http_complex_value_t  *sleep_ms;
@@ -208,7 +209,7 @@
      ngx_log_error(NGX_LOG_NOTICE, r->connection->log, 0,
                    "finished sleeping (async)");
 
-    // Request abschließen, damit NGINX weitermacht
-    ngx_http_finalize_request(r, NGX_DECLINED);
+       // Resume normal processing
+       ngx_http_core_run_phases(r);
  }
  
